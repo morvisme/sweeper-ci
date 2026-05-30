@@ -1,0 +1,50 @@
+name: Sweeper CI
+
+on:
+  schedule:
+    # Run daily at 15:00 UTC
+    - cron: "0 15 * * *"
+  workflow_dispatch: # Allow manual trigger
+
+jobs:
+  sweep:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          repository: ${{ github.repository_owner }}/${{ secrets.PRIVATE_REPO_NAME }}
+          token: ${{ secrets.PAT_PRIVATE_REPO }}
+
+      - name: Set up uv
+        uses: astral-sh/setup-uv@v5
+        with:
+          version: "0.11.16"
+
+      - name: Install dependencies
+        run: uv sync
+
+      - name: Run Sweeper
+        env:
+          DB_CONNECTION: ${{ secrets.DB_CONNECTION }}
+          DB_AUTH: ${{ secrets.DB_AUTH }}
+          NOTIFY_TOKEN: ${{ secrets.NOTIFY_TOKEN }}
+          NOTIFY_DEST: ${{ secrets.NOTIFY_DEST }}
+          ENDPOINT_URL: ${{ secrets.ENDPOINT_URL }}
+          ENDPOINT_AUTH: ${{ secrets.ENDPOINT_AUTH }}
+        run: uv run scraper.py > scraper_run.log 2>&1
+
+      - name: Compress and Encrypt Logs
+        run: |
+          tar -czf logs.tar.gz ./logs/monthly_sync.log
+          gpg --batch --yes --passphrase "${{ secrets.LOGS_PASSPHRASE }}" -c logs.tar.gz
+          # tar -czf - ./path/to/logs | gpg --batch --yes --passphrase "${{ secrets.LOGS_PASSPHRASE }}" -c - > logs.tar.gz.gpg
+
+      - name: Upload Encrypted Artifact
+        # We use an if: always() condition so logs upload even if the scraper crashes
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: encrypted-logs
+          path: logs.tar.gz.gpg
+          # Optional: Delete the logs automatically after 3 days to keep it clean
+          retention-days: 5
